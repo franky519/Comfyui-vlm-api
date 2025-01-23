@@ -3,6 +3,7 @@ from openai import OpenAI
 import base64
 import io
 from PIL import Image
+import numpy as np
 
 class VLMAPINode:
     """
@@ -37,19 +38,49 @@ class VLMAPINode:
     
     def _encode_image(self, image_tensor):
         """将图像tensor转换为base64编码"""
-        # 确保图像tensor格式正确
-        if len(image_tensor.shape) == 4:
-            image_tensor = image_tensor[0]
-        
-        # 转换为PIL Image
-        image = Image.fromarray((image_tensor.cpu().numpy() * 255).astype('uint8').transpose(1, 2, 0))
-        
-        # 转换为base64
-        buffered = io.BytesIO()
-        image.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        
-        return img_str
+        try:
+            # 将tensor转移到CPU并转换为numpy数组
+            image_np = image_tensor.cpu().numpy()
+            
+            # 打印输入图像的形状和类型，用于调试
+            print(f"Input image shape: {image_np.shape}, dtype: {image_np.dtype}")
+            
+            # 处理不同的输入维度情况
+            if len(image_np.shape) == 4:  # (batch, channels, height, width)
+                image_np = image_np[0]
+            
+            # 如果输入是(1, 1, H)格式，需要调整为(H, W)格式
+            if len(image_np.shape) == 3 and image_np.shape[0] == 1 and image_np.shape[1] == 1:
+                image_np = image_np[0, 0]  # 降维到2D
+                # 转换为3通道图像
+                image_np = np.stack([image_np, image_np, image_np], axis=-1)
+            else:
+                # 确保是3通道RGB图像
+                if len(image_np.shape) == 3 and image_np.shape[0] == 1:  # 如果是单通道图像
+                    image_np = np.repeat(image_np, 3, axis=0)  # 将单通道转换为三通道
+                    image_np = np.transpose(image_np, (1, 2, 0))  # 转换为(H, W, C)格式
+            
+            # 确保值范围在0-255之间
+            if image_np.max() <= 1.0:
+                image_np = (image_np * 255).astype(np.uint8)
+            else:
+                image_np = image_np.astype(np.uint8)
+            
+            print(f"Processed image shape: {image_np.shape}, dtype: {image_np.dtype}")
+            
+            # 转换为PIL Image
+            image = Image.fromarray(image_np)
+            
+            # 转换为base64
+            buffered = io.BytesIO()
+            image.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            
+            return img_str
+            
+        except Exception as e:
+            print(f"Error in _encode_image: {str(e)}")
+            raise
     
     def call_api(self, model_name, api_key, base_url, system_prompt, user_prompt, 
                 temperature, top_p, image=None):
